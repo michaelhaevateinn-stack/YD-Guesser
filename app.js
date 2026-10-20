@@ -1,11 +1,43 @@
 const API='https://pokeapi.co/api/v2';
-const hintDefinitions=[['generation','初登場世代'],['bst','合計種族値'],['type','タイプ'],['ability','特性'],['height','高さ'],['weight','重さ'],['gender','性別比'],['evolution','進化前の数'],['egg','タマゴグループ'],['silhouette','シルエット']];
+const hintDefinitions=[['generation','初登場世代'],['bst','合計種族値'],['type','タイプ'],['ability','特性'],['height','高さ'],['weight','重さ'],['gender','性別比'],['evolution','進化の段階'],['egg','タマゴグループ'],['category','分類'],['pokedex','図鑑説明'],['silhouette','シルエット']];
 const $=id=>document.getElementById(id);
 let current=null,token=0,solved=false;
 const cache=new Map();
 async function getJson(url){if(cache.has(url))return cache.get(url);const r=await fetch(url);if(!r.ok)throw Error('API通信エラー: '+r.status);const data=await r.json();cache.set(url,data);return data}
 function ja(names,fallback){return names?.find(n=>n.language.name==='ja-Hrkt')?.name||names?.find(n=>n.language.name==='ja')?.name||fallback}
 function speciesFromChain(chain,id,depth=0){if(Number(chain.species.url.match(/\/(\d+)\/$/)[1])===id)return depth;for(const child of chain.evolves_to){const found=speciesFromChain(child,id,depth+1);if(found!==null)return found}return null}
+function evolutionPosition(chain,id){
+ function walk(node,depth){
+  if(speciesId(node.species.url)===id)return {node,depth};
+  for(const child of node.evolves_to){const hit=walk(child,depth+1);if(hit)return hit}
+  return null;
+ }
+ function longest(node){return node.evolves_to.length?1+Math.max(...node.evolves_to.map(longest)):0}
+ const found=walk(chain,0);
+ if(!found)return {stage:0,total:1};
+ // 現在の枝に沿って、先に何段階進化できるかを計算する。
+ return {stage:found.depth,total:found.depth+longest(found.node)+1};
+}
+function evolutionHint(pos){
+ const {stage,total}=pos;
+ if(total===1)return {stage:0,total:1,comment:'進化しないポケモン'};
+ if(total===2)return {...pos,comment:stage===0?'1回進化するポケモンの最初の姿':'1回進化した最終進化の姿'};
+ return {...pos,comment:stage===0?'2回進化するポケモンの最初の姿':stage===1?'2進化系の真ん中（1進化）':'2回進化した最終進化の姿'};
+}
+// pokemon-species の日本語分類・図鑑テキストをヒントに利用する。
+function japaneseSpeciesText(s,baseName,displayName){
+ const category=s.genera?.find(x=>x.language.name==='ja')?.genus||'データなし';
+ const entries=(s.flavor_text_entries||[]).filter(x=>x.language.name==='ja');
+ // 作品ごとに複数の説明があるため、問題ごとにひとつ選ぶ。
+ const entry=entries.length?entries[Math.floor(Math.random()*entries.length)]:null;
+ let description=entry?.flavor_text?.replace(/[\n\r\f\t]+/g,' ').replace(/\s+/g,' ').trim()||'日本語の図鑑説明は未収録です';
+ // 答えの名前が説明に含まれる場合は隠す。通常名も特殊フォルム名も対象。
+ const hiddenNames=[displayName,baseName,s.name].filter(Boolean);
+ for(const name of hiddenNames.sort((a,b)=>b.length-a.length)){
+  description=description.replaceAll(name,'？？？');
+ }
+ return {category,pokedex:description};
+}
 function sprite(p){return p.sprites.other?.['official-artwork']?.front_default||p.sprites.front_default}
 function displayHints(p,s,abilities,types,eggGroups,gender,evolution,work){const gen=works.find(w=>w[0]===work)?.[2]||s.generation.name;return {generation:(jaGeneration(gen).split('（')[0]) + (work ? `（${workLabels[work]}）` : ''),bst:String(p.stats.reduce((sum,x)=>sum+x.base_stat,0)),type:types.join('・'),ability:abilities.join(' / ')||'未収録',height:(p.height/10)+'m',weight:(p.weight/10)+'kg',gender, evolution:String(evolution??0),egg:eggGroups.join('・')||'未発見',silhouette:sprite(p)}}
 const generationLabels={
@@ -194,9 +226,19 @@ async function makeQuestion(){const id=++token;solved=false;current=null;updateS
  const formName=p.name!==s.name?p.name:null;
  const za=zaForms.find(f=>f.slug===p.name);
  const displayName=za?za.name:(formName?`${ja(s.names,s.name)}（${formJapanese(formName,s.name)}）`:ja(s.names,s.name));
- current={name:displayName,baseName:ja(s.names,s.name),english:p.name,number,hints:displayHints(p,s,abilities,types,eggs,gender,speciesFromChain(evo.chain,number),work)};renderHints();$('status').textContent='ポケモンを推理しよう！';$('answer').disabled=false;refreshSuggestions();
+ const baseName=ja(s.names,s.name);
+ const speciesText=japaneseSpeciesText(s,baseName,displayName);
+ current={name:displayName,baseName,english:p.name,number,hints:{...displayHints(p,s,abilities,types,eggs,gender,evolutionPosition(evo.chain,number).stage,work),...speciesText},evolution:evolutionHint(evolutionPosition(evo.chain,number))};renderHints();$('status').textContent='ポケモンを推理しよう！';$('answer').disabled=false;refreshSuggestions();
  }catch(e){if(id!==token)return;console.error(e);$('status').textContent='取得に失敗しました';$('feedback').textContent='通信状況を確認して「次の問題」を押してね。'}}
-function renderHints(){const container=$('hints');container.replaceChildren();for(const [key,label] of hintDefinitions){const b=document.createElement('button');b.type='button';b.className='hint'+(['type','ability','egg','silhouette'].includes(key)?' wide':'');const title=document.createElement('span');title.className='label';title.textContent=label;b.append(title);const content=document.createElement('span');content.className='locked';content.textContent='🔒 タップして開く';b.append(content);b.addEventListener('click',()=>{if(b.classList.contains('open'))return;b.classList.add('open');content.remove();if(key==='silhouette'){const img=document.createElement('img');img.className='silhouette';img.src=current.hints.silhouette||'';img.alt='ポケモンのシルエット';b.append(img)}else{const value=document.createElement('span');value.className='value';value.textContent=current.hints[key];b.append(value)}});container.append(b)}}
+function renderHints(){const container=$('hints');container.replaceChildren();for(const [key,label] of hintDefinitions){const b=document.createElement('button');b.type='button';b.className='hint'+(['type','ability','egg','pokedex','silhouette'].includes(key)?' wide':'');const title=document.createElement('span');title.className='label';title.textContent=label;b.append(title);const content=document.createElement('span');content.className='locked';content.textContent='🔒 タップして開く';b.append(content);b.addEventListener('click',()=>{if(b.classList.contains('open'))return;b.classList.add('open');content.remove();if(key==='evolution'){
+ const info=current.evolution;
+ const diagram=document.createElement('span');diagram.className='evo-diagram';diagram.setAttribute('aria-label',`全${info.total}段階中${info.stage+1}段階目`);
+ for(let i=0;i<info.total;i++){
+  if(i){const line=document.createElement('span');line.className='evo-line';diagram.append(line)}
+  const dot=document.createElement('span');dot.className='evo-dot'+(i===info.stage?' active':'');diagram.append(dot)
+ }
+ const note=document.createElement('span');note.className='evo-comment';note.textContent=info.comment;b.append(diagram,note)
+ }else if(key==='silhouette'){const img=document.createElement('img');img.className='silhouette';img.src=current.hints.silhouette||'';img.alt='ポケモンのシルエット';b.append(img)}else{const value=document.createElement('span');value.className='value';value.textContent=current.hints[key];b.append(value)}});container.append(b)}}
 function formJapanese(form,base){const suffix=form.startsWith(base+'-')?form.slice(base.length+1):form;const map={'mega':'メガシンカ','mega-x':'メガX','mega-y':'メガY','primal':'ゲンシカイキ','alola':'アローラのすがた','galar':'ガラルのすがた','hisui':'ヒスイのすがた','origin':'オリジンフォルム','sky':'スカイフォルム','heat':'ヒートロトム','wash':'ウォッシュロトム','frost':'フロストロトム','fan':'スピンロトム','mow':'カットロトム','hero':'マイティフォルム','wellspring-mask':'いどのめん','hearthflame-mask':'かまどのめん','cornerstone-mask':'いしずえのめん','attack':'アタックフォルム','defense':'ディフェンスフォルム','speed':'スピードフォルム','therian':'れいじゅうフォルム','origin':'オリジンフォルム','black':'ブラックキュレム','white':'ホワイトキュレム','blade':'ブレードフォルム','dusk':'たそがれのたてがみ','dawn':'あかつきのつばさ','ultra':'ウルトラネクロズマ','rapid-strike':'れんげきのかた','ice':'はくばじょうのすがた','shadow':'こくばじょうのすがた','crowned':'けんのおう／たてのおう','paldea-combat-breed':'パルデア・コンバット種','paldea-blaze-breed':'パルデア・ブレイズ種','paldea-aqua-breed':'パルデア・ウォーター種','paldea':'パルデアのすがた','terastal':'テラスタルフォルム','stellar':'ステラフォルム'};return map[suffix]||suffix.replace(/-/g,'・')}
 function normalized(s){return s.normalize('NFKC').replace(/[\s・･ー\-（）()]/g,'').toLowerCase()}
 // 回答候補は全種族の日本語名データから作る。出題ポケモンだけを表示しない。
