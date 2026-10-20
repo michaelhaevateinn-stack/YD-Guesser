@@ -193,25 +193,18 @@ async function getPool(){
  return candidates;
 }
 function isFinalEvolution(node,speciesNumber){if(speciesId(node.species.url)===speciesNumber)return node.evolves_to.length===0;for(const child of node.evolves_to){const found=isFinalEvolution(child,speciesNumber);if(found!==null)return found}return null}
-async function makeQuestion(){const id=++token;solved=false;current=null;updateSettingsSummary();$('status').textContent='ポケモンを選んでいます…';$('feedback').textContent='';$('answer').value='';closeSuggestions();$('reveal').hidden=true;$('hints').replaceChildren();$('answer').disabled=true;try{
+async function makeQuestion(){const id=++token;solved=false;current=null;updateSettingsSummary();$('status').textContent='ポケモンを選んでいます…';$('feedback').textContent='';$('answer').value='';closeSuggestions();$('reveal').hidden=true;$('bottomNextWrap').hidden=true;$('hints').replaceChildren();$('answer').disabled=true;try{
  const pool=await getPool();if(id!==token)return;if(!pool.length)throw Error('出題対象がありません');
  const candidates=[...pool];let number,p,s,evo,work;
  while(candidates.length){const index=Math.floor(Math.random()*candidates.length);const candidate=candidates[index];candidates[index]=candidates[candidates.length-1];candidates.pop();
   try{p=await getJson(`${API}/pokemon/${candidate.slug||candidate.id}`)}catch(err){
-    if(candidate.za && String(err).includes('404')){
-      // API未登録フォームは基礎種のデータと確認済み種族値を併用。
-      p={...(await getJson(`${API}/pokemon/${candidate.id}`)),name:candidate.slug,abilities:[],
-         stats:candidate.stats.map(n=>({base_stat:n})),
-         sprites:{other:{'official-artwork':{front_default:null}},front_default:null}};
-    }else if(candidate.slug&&String(err).includes('404'))continue;else throw err;
+    // APIに存在しない特殊フォルムは、通常の姿を代用せず出題対象から外す。
+    if(candidate.slug && String(err).includes('404'))continue;
+    throw err;
   }
-  if(candidate.za){
-    // Z-Aの画像はShowdown公開スプライトを補助として使う。
-    // 存在しない画像を通常姿に置き換えない。
-    const img=p.sprites.other?.['official-artwork']?.front_default||p.sprites.front_default;
-    const fallback=`https://play.pokemonshowdown.com/sprites/ani/${candidate.slug}.gif`;
-    p={...p,stats:candidate.stats.map(n=>({base_stat:n})),sprites:{other:{'official-artwork':{front_default:img||fallback}},front_default:img||fallback}};
-  }
+  // シルエットで見分けられない特殊フォルムは出題しない。
+  if(candidate.slug && !sprite(p))continue;
+
   s=await getJson(p.species.url);number=speciesId(p.species.url);evo=await getJson(s.evolution_chain.url);if(id!==token)return;
   if(settings.evolutionFilter==='all'||isFinalEvolution(evo.chain,number)===true){work=candidate.work;break}
   number=null;
@@ -240,7 +233,7 @@ function renderHints(){const container=$('hints');container.replaceChildren();fo
  const note=document.createElement('span');note.className='evo-comment';note.textContent=info.comment;b.append(diagram,note)
  }else if(key==='silhouette'){const img=document.createElement('img');img.className='silhouette';img.src=current.hints.silhouette||'';img.alt='ポケモンのシルエット';b.append(img)}else{const value=document.createElement('span');value.className='value';value.textContent=current.hints[key];b.append(value)}});container.append(b)}}
 function formJapanese(form,base){const suffix=form.startsWith(base+'-')?form.slice(base.length+1):form;const map={'mega':'メガシンカ','mega-x':'メガX','mega-y':'メガY','primal':'ゲンシカイキ','alola':'アローラのすがた','galar':'ガラルのすがた','hisui':'ヒスイのすがた','origin':'オリジンフォルム','sky':'スカイフォルム','heat':'ヒートロトム','wash':'ウォッシュロトム','frost':'フロストロトム','fan':'スピンロトム','mow':'カットロトム','hero':'マイティフォルム','wellspring-mask':'いどのめん','hearthflame-mask':'かまどのめん','cornerstone-mask':'いしずえのめん','attack':'アタックフォルム','defense':'ディフェンスフォルム','speed':'スピードフォルム','therian':'れいじゅうフォルム','origin':'オリジンフォルム','black':'ブラックキュレム','white':'ホワイトキュレム','blade':'ブレードフォルム','dusk':'たそがれのたてがみ','dawn':'あかつきのつばさ','ultra':'ウルトラネクロズマ','rapid-strike':'れんげきのかた','ice':'はくばじょうのすがた','shadow':'こくばじょうのすがた','crowned':'けんのおう／たてのおう','paldea-combat-breed':'パルデア・コンバット種','paldea-blaze-breed':'パルデア・ブレイズ種','paldea-aqua-breed':'パルデア・ウォーター種','paldea':'パルデアのすがた','terastal':'テラスタルフォルム','stellar':'ステラフォルム'};return map[suffix]||suffix.replace(/-/g,'・')}
-function normalized(s){return s.normalize('NFKC').replace(/[\s・･ー\-（）()]/g,'').toLowerCase()}
+function normalized(s){return s.normalize('NFKC').replace(/[\s・･ー\-（）()\uFE0E\uFE0F]/g,'').toLowerCase()}
 // 回答候補は全種族の日本語名データから作る。出題ポケモンだけを表示しない。
 const namesUrl='https://raw.githubusercontent.com/PokeAPI/pokeapi/master/data/v2/csv/pokemon_species_names.csv';
 let nameIndex=[], nameLoading=null;
@@ -263,5 +256,5 @@ $('answer').addEventListener('focus',refreshSuggestions);
 $('answer').addEventListener('keydown',e=>{if(e.key==='Escape')closeSuggestions()});
 document.addEventListener('click',e=>{if(!e.target.closest('.answer-entry'))closeSuggestions()});
 loadNames();
-$('answerForm').addEventListener('submit',e=>{e.preventDefault();if(!current||solved)return;const value=$('answer').value.trim();if(!value)return;if([current.name,current.english,current.baseName].some(n=>normalized(n)===normalized(value)) || (current.name!==current.baseName && normalized(value)===normalized(current.baseName+'（'+formJapanese(current.english,current.english.split('-')[0])+'）'))){solved=true;closeSuggestions();$('feedback').textContent='大正解！ 🎉';$('pokemonImage').src=current.hints.silhouette||'';$('pokemonName').textContent=current.name;$('reveal').hidden=false;$('answer').disabled=true}else{$('feedback').textContent='おしい！ヒントを開いてもう一度考えよう！';$('answer').select()}});
-$('next').addEventListener('click',makeQuestion);makeQuestion();
+$('answerForm').addEventListener('submit',e=>{e.preventDefault();if(!current||solved)return;const value=$('answer').value.trim();if(!value)return;if([current.name,current.english,...(current.name===current.baseName?[current.baseName]:[])].some(n=>normalized(n)===normalized(value))){solved=true;closeSuggestions();$('feedback').textContent='大正解！ 🎉';$('pokemonImage').src=current.hints.silhouette||'';$('pokemonName').textContent=current.name;$('reveal').hidden=false;$('bottomNextWrap').hidden=false;$('answer').disabled=true}else{$('feedback').textContent='おしい！ヒントを開いてもう一度考えよう！';$('answer').select()}});
+$('next').addEventListener('click',makeQuestion);$('nextBottom').addEventListener('click',makeQuestion);makeQuestion();

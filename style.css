@@ -10,3 +10,10 @@
 /* 図鑑説明は読みやすい段落として表示 */
 .hint.open:has(.value) .value{line-height:1.6}
 .hint.wide.open .value{max-width:100%;padding:3px 6px}
+
+/* v0.5.4: 回答後の下部ボタン */
+#bottomNextWrap[hidden]{display:none}
+#bottomNextWrap{text-align:center;margin:18px 0 4px}
+#nextBottom{display:block;width:100%;max-width:350px;margin:auto;padding:15px 20px;border:2px solid #39413d;border-radius:30px;background:#ffe28a;color:#263632;font-size:17px;font-weight:800}
+/* iPhoneでニドランの性別記号が別行に落ちないようにする */
+.suggestion{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.45;font-family:system-ui,-apple-system,'Helvetica Neue','Yu Gothic',sans-serif;font-variant-emoji:text}
