@@ -236,25 +236,73 @@ function formJapanese(form,base){const suffix=form.startsWith(base+'-')?form.sli
 function normalized(s){return s.normalize('NFKC').replace(/[\s・･ー\-（）()\uFE0E\uFE0F]/g,'').toLowerCase()}
 // 回答候補は全種族の日本語名データから作る。出題ポケモンだけを表示しない。
 const namesUrl='https://raw.githubusercontent.com/PokeAPI/pokeapi/master/data/v2/csv/pokemon_species_names.csv';
-let nameIndex=[], nameLoading=null;
+let nameIndex=[], nameLoading=null, speciesNamesByEnglish=new Map();
 const specialSuffixes={'alola':'アローラ','galar':'ガラル','hisui':'ヒスイ','mega':'メガ','mega-x':'メガX','mega-y':'メガY','primal':'ゲンシ'};
 function parseCsvLine(line){const cols=[];let part='',quoted=false;for(let i=0;i<line.length;i++){const c=line[i];if(c==='\"'){if(quoted&&line[i+1]==='\"'){part+='\"';i++}else quoted=!quoted}else if(c===','&&!quoted){cols.push(part);part=''}else part+=c}cols.push(part);return cols}
-async function loadNames(){if(nameLoading)return nameLoading;nameLoading=(async()=>{try{const res=await fetch(namesUrl);if(!res.ok)throw Error('名前データ取得失敗');const csv=await res.text();const names=new Map();for(const line of csv.split(/\r?\n/).slice(1)){if(!line)continue;const [id,lang,name]=parseCsvLine(line);if(lang==='1'||(lang==='11'&&!names.has(Number(id))))names.set(Number(id),name)}nameIndex=[...names].map(([id,name])=>({id,name,normalized:normalized(name)}));nameIndex.sort((a,b)=>a.id-b.id);refreshSuggestions()}catch(e){console.warn('日本語候補の取得に失敗:',e);nameIndex=[]}})();return nameLoading}
+async function loadNames(){
+ if(nameLoading)return nameLoading;
+ nameLoading=(async()=>{try{
+  const [namesRes,speciesRes]=await Promise.all([
+   fetch(namesUrl),
+   fetch('https://raw.githubusercontent.com/PokeAPI/pokeapi/master/data/v2/csv/pokemon_species.csv')
+  ]);
+  if(!namesRes.ok||!speciesRes.ok)throw Error('名前データ取得失敗');
+  const [csv,speciesCsv]=await Promise.all([namesRes.text(),speciesRes.text()]);
+  const names=new Map();
+  for(const line of csv.split(/\r?\n/).slice(1)){
+   if(!line)continue;
+   const [id,lang,name]=parseCsvLine(line);
+   if(lang==='1'||(lang==='11'&&!names.has(Number(id))))names.set(Number(id),name);
+  }
+  nameIndex=[...names].map(([id,name])=>({id,name,normalized:normalized(name)}));
+  nameIndex.sort((a,b)=>a.id-b.id);
+  speciesNamesByEnglish=new Map();
+  for(const line of speciesCsv.split(/\r?\n/).slice(1)){
+   if(!line)continue;
+   const [id,english]=parseCsvLine(line);
+   const japanese=names.get(Number(id));
+   if(japanese&&english)speciesNamesByEnglish.set(english,japanese);
+  }
+  refreshSuggestions();
+ }catch(e){console.warn('日本語候補の取得に失敗:',e);nameIndex=[]}})();
+ return nameLoading;
+}
 function closeSuggestions(){const box=$('suggestions');box.hidden=true;box.replaceChildren()}
-function refreshSuggestions(){const input=$('answer');const box=$('suggestions');const query=normalized(input.value.trim());box.replaceChildren();if(!query||input.disabled||solved){box.hidden=true;return}
-const found=[];const seen=new Set();function add(name){if(!name||seen.has(name)||!normalized(name).includes(query))return;seen.add(name);found.push(name)}
-for(const item of nameIndex){if(item.normalized.includes(query)){add(item.name);if(found.length>=12)break}}
-// 日本語の特殊フォルム名も候補に含める（元の名前で検索しても表示する）。
-for(const f of formEntries){const slug=fixSlug(f.slug);const suffix=Object.keys(specialSuffixes).find(x=>slug.endsWith('-'+x));if(!suffix)continue;const base=slug.slice(0,-suffix.length-1);const item=nameIndex.find(n=>n.name&&n.id===speciesIdsByEnglish[base]);if(item){const label=item.name+'（'+specialSuffixes[suffix]+'）';if(normalized(item.name).includes(query)||normalized(label).includes(query))add(label)}if(found.length>=16)break}
-for(const f of zaForms)if(normalized(f.name).includes(query))add(f.name);
-// 出題中の正解を候補に特別追加しない（ネタバレ防止）。
-for(const name of found.slice(0,12)){const b=document.createElement('button');b.type='button';b.className='suggestion';b.textContent=name;b.addEventListener('click',()=>{input.value=name;closeSuggestions();input.focus()});box.append(b)}box.hidden=!box.childElementCount}
-// 特殊フォルム用の代表的な英語名と図鑑番号（候補生成の補助）。
-const speciesIdsByEnglish={'charizard':6,'venusaur':3,'blastoise':9,'zoroark':571,'zorua':570,'raichu':26,'gengar':94,'mewtwo':150,'typhlosion':157,'goodra':706,'rotom':479};
+function refreshSuggestions(){
+ const input=$('answer'),box=$('suggestions'),query=normalized(input.value.trim());
+ box.replaceChildren();
+ if(!query||input.disabled||solved){box.hidden=true;return}
+ const found=[],seen=new Set();
+ function add(name){if(!name||seen.has(name)||!normalized(name).includes(query))return;seen.add(name);found.push(name)}
+ // 通常種族を先に表示する。続いて同じ種族の特殊フォルムも検索する。
+ for(const item of nameIndex)if(item.normalized.includes(query))add(item.name);
+ const forms=[...formEntries,...zaForms];
+ for(const f of forms){
+  const slug=fixSlug(f.slug);
+  let base='',suffix='';
+  // 英語の種族名から最長一致で判定。mega-slowbro → slowbro-mega などにも対応。
+  for(const english of speciesNamesByEnglish.keys()){
+   if(slug.startsWith(english+'-')&&english.length>base.length){base=english;suffix=slug.slice(english.length+1)}
+  }
+  if(!base)continue;
+  const japanese=speciesNamesByEnglish.get(base);
+  const formLabel=specialSuffixes[suffix]||formJapanese(slug,base);
+  add(japanese+'（'+formLabel+'）');
+ }
+ // 名前だけの検索でZ-Aの登録済み表示名も拾う。
+ for(const f of zaForms)if(f.name)add(f.name);
+ for(const name of found.slice(0,16)){
+  const button=document.createElement('button');
+  button.type='button';button.className='suggestion';button.textContent=name;
+  button.addEventListener('click',()=>{input.value=name;closeSuggestions();input.focus()});
+  box.append(button);
+ }
+ box.hidden=!box.childElementCount;
+}
 $('answer').addEventListener('input',refreshSuggestions);
 $('answer').addEventListener('focus',refreshSuggestions);
 $('answer').addEventListener('keydown',e=>{if(e.key==='Escape')closeSuggestions()});
 document.addEventListener('click',e=>{if(!e.target.closest('.answer-entry'))closeSuggestions()});
 loadNames();
-$('answerForm').addEventListener('submit',e=>{e.preventDefault();if(!current||solved)return;const value=$('answer').value.trim();if(!value)return;if([current.name,current.english,...(current.name===current.baseName?[current.baseName]:[])].some(n=>normalized(n)===normalized(value))){solved=true;closeSuggestions();$('feedback').textContent='大正解！ 🎉';$('pokemonImage').src=current.hints.silhouette||'';$('pokemonName').textContent=current.name;$('reveal').hidden=false;$('bottomNextWrap').hidden=false;$('answer').disabled=true}else{$('feedback').textContent='おしい！ヒントを開いてもう一度考えよう！';$('answer').select()}});
+$('answerForm').addEventListener('submit',e=>{e.preventDefault();if(!current||solved)return;const value=$('answer').value.trim();if(!value)return;if([current.name,current.english,current.baseName].some(n=>normalized(n)===normalized(value))){solved=true;closeSuggestions();$('feedback').textContent='大正解！ 🎉';$('pokemonImage').src=current.hints.silhouette||'';$('pokemonName').textContent=current.name;$('reveal').hidden=false;$('bottomNextWrap').hidden=false;$('answer').disabled=true}else{$('feedback').textContent='おしい！ヒントを開いてもう一度考えよう！';$('answer').select()}});
 $('next').addEventListener('click',makeQuestion);$('nextBottom').addEventListener('click',makeQuestion);makeQuestion();
